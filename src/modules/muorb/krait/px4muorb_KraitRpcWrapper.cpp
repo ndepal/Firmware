@@ -34,6 +34,8 @@
 #include <time.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <vector>
+#include <algorithm>
 #include "px4muorb_KraitRpcWrapper.hpp"
 #include <rpcmem.h>
 #include "px4muorb.h"
@@ -79,53 +81,113 @@ int calc_timer_diff_to_dsp_us(int32_t *time_diff_us);
 
 int calc_timer_diff_to_dsp_us(int32_t *time_diff_us)
 {
-	int fd = open(DSP_TIMER_FILE, O_RDONLY);
 
-	if (fd < 0) {
-		PX4_ERR("Could not open DSP timer file %s.", DSP_TIMER_FILE);
-		return -1;
-	}
-
-	char buffer[21];
-	memset(buffer, 0, sizeof(buffer));
-	int bytes_read = read(fd, buffer, sizeof(buffer));
-
-	if (bytes_read < 0) {
-		PX4_ERR("Could not read DSP timer file %s.", DSP_TIMER_FILE);
-		close(fd);
-		return -2;
-	}
-
-	// Do this call right after reading to avoid latency here.
-	timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	uint64_t time_appsproc = ((uint64_t)ts.tv_sec) * 1000000llu + (ts.tv_nsec / 1000);
-
-	close(fd);
-
+	// repeatedly calculate time difference to make sure the process didn't get scheduled out while getting times
+	uint64_t time_appsproc;
 	uint64_t time_dsp;
-	int ret  = sscanf(buffer, "%llx", &time_dsp);
 
-	if (ret < 0) {
-		PX4_ERR("Could not parse DSP timer.");
-		return -3;
+	int num_tries_per_order = 9;
+	std::vector<int32_t> time_diffs_dsp(num_tries_per_order, 0); // when getting dsp time first
+	std::vector<int32_t> time_diffs_appsproc(num_tries_per_order, 0); // when getting appsproc time first
+
+	// get dsp time first
+	for (int i = 0; i < num_tries_per_order; i++) {
+		timespec ts;
+		int fd = open(DSP_TIMER_FILE, O_RDONLY);
+
+		if (fd < 0) {
+			PX4_ERR("Could not open DSP timer file %s.", DSP_TIMER_FILE);
+			return -1;
+		}
+
+		char buffer[21];
+		memset(buffer, 0, sizeof(buffer));
+		int bytes_read = read(fd, buffer, sizeof(buffer));
+		clock_gettime(CLOCK_MONOTONIC, &ts);
+		time_appsproc = ((uint64_t)ts.tv_sec) * 1000000llu + (ts.tv_nsec / 1000);
+		close(fd);
+
+		if (bytes_read < 0) {
+			PX4_ERR("Could not read DSP timer file %s.", DSP_TIMER_FILE);
+			close(fd);
+			return -2;
+		}
+
+		int ret  = sscanf(buffer, "%llx", &time_dsp);
+		if (ret < 0) {
+			PX4_ERR("Could not parse DSP timer.");
+			return -3;
+		}
+
+		// The clock count needs to get converted to us. The clock supposedly
+		// runs at just under 20 MHz. The magic value of 19.2 was provided by
+		// Qualcomm.
+		time_dsp /= 19.2;
+
+		// Before casting to in32_t, check if it fits.
+		uint64_t abs_diff = (time_appsproc > time_dsp)
+				    ? (time_appsproc - time_dsp) : (time_dsp - time_appsproc);
+
+		if (abs_diff > INT32_MAX) {
+			PX4_ERR("Timer difference too big");
+			return -4;
+		}
+
+		time_diffs_dsp[i] = time_appsproc - time_dsp;
+		PX4_DEBUG("DSP first, time diff %ld", time_diffs_dsp[i]);
 	}
 
-	// The clock count needs to get converted to us. The clock supposedly
-	// runs at just under 20 MHz. The magic value of 19.2 was provided by
-	// Qualcomm.
-	time_dsp /= 19.2;
+	// get appsproc time first
+	for (int i = 0; i < num_tries_per_order; i++) {
+		int fd = open(DSP_TIMER_FILE, O_RDONLY);
 
-	// Before casting to in32_t, check if it fits.
-	uint64_t abs_diff = (time_appsproc > time_dsp)
-			    ? (time_appsproc - time_dsp) : (time_dsp - time_appsproc);
+		if (fd < 0) {
+			PX4_ERR("Could not open DSP timer file %s.", DSP_TIMER_FILE);
+			return -1;
+		}
 
-	if (abs_diff > INT32_MAX) {
-		PX4_ERR("Timer difference too big");
-		return -4;
+		timespec ts;
+		char buffer[21];
+		memset(buffer, 0, sizeof(buffer));
+		clock_gettime(CLOCK_MONOTONIC, &ts);
+		int bytes_read = read(fd, buffer, sizeof(buffer));
+		time_appsproc = ((uint64_t)ts.tv_sec) * 1000000llu + (ts.tv_nsec / 1000);
+		close(fd);
+
+		if (bytes_read < 0) {
+			PX4_ERR("Could not read DSP timer file %s.", DSP_TIMER_FILE);
+			close(fd);
+			return -2;
+		}
+
+		int ret  = sscanf(buffer, "%llx", &time_dsp);
+		if (ret < 0) {
+			PX4_ERR("Could not parse DSP timer.");
+			return -3;
+		}
+
+		// The clock count needs to get converted to us. The clock supposedly
+		// runs at just under 20 MHz. The magic value of 19.2 was provided by
+		// Qualcomm.
+		time_dsp /= 19.2;
+
+		// Before casting to in32_t, check if it fits.
+		uint64_t abs_diff = (time_appsproc > time_dsp)
+				    ? (time_appsproc - time_dsp) : (time_dsp - time_appsproc);
+
+		if (abs_diff > INT32_MAX) {
+			PX4_ERR("Timer difference too big");
+			return -4;
+		}
+
+		time_diffs_appsproc[ i] = time_appsproc - time_dsp;
+		PX4_DEBUG("Appsproc first, time diff %ld", time_diffs_appsproc[i]);
 	}
-
-	*time_diff_us = time_appsproc - time_dsp;
+	// take the median value of both
+	// TODO should we take the minimum instead?
+	std::sort(time_diffs_dsp.begin(), time_diffs_dsp.end());
+	std::sort(time_diffs_appsproc.begin(), time_diffs_appsproc.end());
+	*time_diff_us = (time_diffs_dsp[num_tries_per_order/2] + time_diffs_appsproc[num_tries_per_order/2])/2;
 
 	PX4_DEBUG("found time_dsp: %llu us, time_appsproc: %llu us", time_dsp, time_appsproc);
 	PX4_DEBUG("found time_diff: %li us, %.6f s", *time_diff_us, ((double)*time_diff_us) / 1e6);
@@ -213,12 +275,18 @@ bool px4muorb::KraitRpcWrapper::Initialize()
 	// TODO FIXME: remove this check or make it less verbose later
 	px4muorb_set_absolute_time_offset(time_diff_us);
 
-	uint64_t time_dsp;
-	px4muorb_get_absolute_time(&time_dsp);
+	// compare the timestamps twice, once getting dsp time first and once getting appsproc time first
+	uint64_t time_dsp, time_appsproc;
 
-	uint64_t time_appsproc = hrt_absolute_time();
+	px4muorb_get_absolute_time(&time_dsp);
+	time_appsproc = hrt_absolute_time();
 
 	int diff = (time_dsp - time_appsproc);
+
+	time_appsproc = hrt_absolute_time();
+	px4muorb_get_absolute_time(&time_dsp);
+
+	diff = diff / 2 + (time_dsp - time_appsproc) / 2;
 
 	PX4_INFO("time_dsp: %llu us, time appsproc: %llu us, diff: %d us", time_dsp, time_appsproc, diff);
 
