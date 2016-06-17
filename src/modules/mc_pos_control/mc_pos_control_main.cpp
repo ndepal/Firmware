@@ -1210,21 +1210,26 @@ void MulticopterPositionControl::control_auto(float dt)
 
 				// check which turning direction is closer
 				bool do_wrap = false;
-				float clockwise_dist = _pos_sp_triplet.current.yaw - _pos_sp_triplet.previous.yaw;
-				if (clockwise_dist > M_PI_F || clockwise_dist < -M_PI_F) {
+				float yaw_diff = _pos_sp_triplet.current.yaw - _pos_sp_triplet.previous.yaw;
+				if (yaw_diff > M_PI_F || yaw_diff < -M_PI_F) {
 					do_wrap = true;
 				}
 
 				if (!do_wrap) {
 					_att_sp.yaw_body = progress * _pos_sp_triplet.current.yaw + (1.0f - progress) * _pos_sp_triplet.previous.yaw;
 				} else {
-					_att_sp.yaw_body = progress * (2.0f * M_PI_F + _pos_sp_triplet.current.yaw) + (1.0f - progress) * _pos_sp_triplet.previous.yaw;
+					if (_pos_sp_triplet.current.yaw < _pos_sp_triplet.previous.yaw) {
+						_att_sp.yaw_body = progress * (_pos_sp_triplet.current.yaw + 2.0f * M_PI_F) + (1.0f - progress) * _pos_sp_triplet.previous.yaw;
+					} else {
+						_att_sp.yaw_body = progress * (_pos_sp_triplet.current.yaw - 2.0f * M_PI_F) + (1.0f - progress) * _pos_sp_triplet.previous.yaw;
+					}
 				}
 				_att_sp.yaw_body = _wrap_pi(_att_sp.yaw_body);
 
 				static int printcnt = 0;
-				if (printcnt % 100 == 0)
+				if (printcnt % 100 == 0) {
 					PX4_ERR("%s progress %.3f, yaw [%.3f -> %.3f] setp %f", do_wrap ? "wrapping" : "        ", (double)progress, (double)_pos_sp_triplet.previous.yaw, (double)_pos_sp_triplet.current.yaw, (double)_att_sp.yaw_body);
+				}
 				printcnt++;
 
 			} else {
