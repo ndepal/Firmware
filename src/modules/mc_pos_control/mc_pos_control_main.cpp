@@ -199,6 +199,7 @@ private:
 		param_t acc_hor_max;
 		param_t alt_mode;
 		param_t opt_recover;
+		param_t yaw_mode;
 
 	}		_params_handles;		/**< handles for interesting parameters */
 
@@ -224,6 +225,7 @@ private:
 		float vel_max_up;
 		float vel_max_down;
 		uint32_t alt_mode;
+		uint32_t yaw_mode;
 
 		int opt_recover;
 
@@ -236,6 +238,11 @@ private:
 		math::Vector<3> vel_cruise;
 		math::Vector<3> sp_offs_max;
 	}		_params;
+
+	enum mpc_yaw_mode {
+		MPC_YAWMODE_NONE = 0,
+		MPC_YAWMODE_INTERPOLATE = 1
+	};
 
 	struct map_projection_reference_s _ref_pos;
 	float _ref_alt;
@@ -267,6 +274,7 @@ private:
 	float _acc_z_lp;
 	float _takeoff_thrust_sp;
 	bool control_vel_enabled_prev;	/**< previous loop was in velocity controlled mode (control_state.flag_control_velocity_enabled) */
+	float _last_progress; /**< the progress along the segment between two waypoints */
 
 	/**
 	 * Update our local parameter cache.
@@ -409,7 +417,8 @@ MulticopterPositionControl::MulticopterPositionControl() :
 	_vel_z_lp(0),
 	_acc_z_lp(0),
 	_takeoff_thrust_sp(0.0f),
-	control_vel_enabled_prev(false)
+	control_vel_enabled_prev(false),
+	_last_progress(0.0)
 {
 	// Make the quaternion valid for control state
 	_ctrl_state.q[0] = 1.0f;
@@ -478,6 +487,7 @@ MulticopterPositionControl::MulticopterPositionControl() :
 	_params_handles.acc_hor_max = param_find("MPC_ACC_HOR_MAX");
 	_params_handles.alt_mode = param_find("MPC_ALT_MODE");
 	_params_handles.opt_recover = param_find("VT_OPT_RECOV_EN");
+	_params_handles.yaw_mode = param_find("MPC_YAW_MODE");
 
 	/* fetch initial parameter values */
 	parameters_update(true);
@@ -595,6 +605,8 @@ MulticopterPositionControl::parameters_update(bool force)
 		_params.acc_hor_max = math::max(_params.vel_cruise(0), _params.acc_hor_max);
 		param_get(_params_handles.alt_mode, &v_i);
 		_params.alt_mode = v_i;
+		param_get(_params_handles.yaw_mode, &v_i);
+		_params.yaw_mode = v_i;
 
 		int i;
 		param_get(_params_handles.opt_recover, &i);
@@ -1048,6 +1060,8 @@ void MulticopterPositionControl::control_auto(float dt)
 		}
 	}
 
+	float progress = 0.0; // progress along the way between the two waypoints
+
 	if (current_setpoint_valid) {
 		/* scaled space: 1 == position error resulting max allowed speed */
 
@@ -1081,6 +1095,28 @@ void MulticopterPositionControl::control_auto(float dt)
 				math::Vector<3> prev_curr_s = curr_sp_s - prev_sp_s;
 				math::Vector<3> curr_pos_s = pos_s - curr_sp_s;
 				float curr_pos_s_len = curr_pos_s.length();
+				float prev_curr_s_len = prev_curr_s.length();
+
+				// calculate how far we are along the "previous - current" line
+				progress = math::constrain(1.0 - curr_pos_s_len/prev_curr_s_len, 0.0, 1.0);
+				if (progress < _last_progress) {
+					// progress should increase monotonically except when switching to a new waypoint, where it jumps down to 0
+					if (_pos_sp_triplet.current.acceptance_radius > 0.0) {
+						PX4_WARN("here");
+						if (progress < 0.1 && curr_pos_s_len < 1.2 * _pos_sp_triplet.current.acceptance_radius * scale.length()) {
+							// progress is small because we are tracking a new waypoint
+							_last_progress = progress;
+							PX4_ERR("resetting progress");
+						}
+					} else { // cant do check with acceptance_radius because its not set properly
+						if (progress < 0.1 && _last_progress > 0.5) {
+							_last_progress = progress;
+							PX4_ERR("resetting progress. Acceptance radius is zero!");
+						}
+					}
+					progress = _last_progress; // make sure progress increases monotonically
+				}
+				_last_progress = progress;
 
 				if (curr_pos_s_len < 1.0f) {
 					/* copter is closer to waypoint than unit radius */
@@ -1167,7 +1203,32 @@ void MulticopterPositionControl::control_auto(float dt)
 			_att_sp.yaw_body = _att_sp.yaw_body + _pos_sp_triplet.current.yawspeed * dt;
 
 		} else if (PX4_ISFINITE(_pos_sp_triplet.current.yaw)) {
-			_att_sp.yaw_body = _pos_sp_triplet.current.yaw;
+			if (_params.yaw_mode == MPC_YAWMODE_INTERPOLATE && PX4_ISFINITE(_pos_sp_triplet.current.yaw) && PX4_ISFINITE(_pos_sp_triplet.previous.yaw)){
+
+				// check which turning direction is closer
+				bool do_wrap = false;
+				float clockwise_dist = _pos_sp_triplet.current.yaw - _pos_sp_triplet.previous.yaw;
+				if (clockwise_dist > M_PI_F || clockwise_dist < -M_PI_F) {
+					do_wrap = true;
+				}
+
+				if (!do_wrap) {
+					_att_sp.yaw_body = progress * _pos_sp_triplet.current.yaw + (1.0 - progress) * _pos_sp_triplet.previous.yaw;
+					// PX4_ERR("clockwise");
+				} else { // rotate counter clockise
+					_att_sp.yaw_body = progress * (2 * M_PI_F + _pos_sp_triplet.current.yaw) + (1.0 - progress) * _pos_sp_triplet.previous.yaw;
+					// PX4_ERR("counter clockwise");
+				}
+				_att_sp.yaw_body = _wrap_pi(_att_sp.yaw_body);
+
+				static int printcnt = 0;
+				if (printcnt % 100 == 0)
+					PX4_ERR("%s progress %.3f, yaw [%.3f -> %.3f] setp %f", do_wrap ? "wrapping" : "        ", progress, _pos_sp_triplet.previous.yaw, _pos_sp_triplet.current.yaw, _att_sp.yaw_body);
+				printcnt++;
+
+			} else {
+				_att_sp.yaw_body = _pos_sp_triplet.current.yaw;
+			}
 		}
 
 		/*
