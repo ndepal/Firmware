@@ -1098,18 +1098,17 @@ void MulticopterPositionControl::control_auto(float dt)
 				float prev_curr_s_len = prev_curr_s.length();
 
 				// calculate how far we are along the "previous - current" line
-				progress = math::constrain(1.0 - curr_pos_s_len/prev_curr_s_len, 0.0, 1.0);
+				progress = math::constrain(1.0f - curr_pos_s_len/prev_curr_s_len, 0.0f, 1.0f);
 				if (progress < _last_progress) {
 					// progress should increase monotonically except when switching to a new waypoint, where it jumps down to 0
-					if (_pos_sp_triplet.current.acceptance_radius > 0.0) {
-						PX4_WARN("here");
-						if (progress < 0.1 && curr_pos_s_len < 1.2 * _pos_sp_triplet.current.acceptance_radius * scale.length()) {
+					if (_pos_sp_triplet.current.acceptance_radius > 0.0f) {
+						if (progress < 0.1f && curr_pos_s_len < 1.2f * _pos_sp_triplet.current.acceptance_radius * scale.length()) {
 							// progress is small because we are tracking a new waypoint
 							_last_progress = progress;
 							PX4_ERR("resetting progress");
 						}
 					} else { // cant do check with acceptance_radius because its not set properly
-						if (progress < 0.1 && _last_progress > 0.5) {
+						if (progress < 0.1f && _last_progress > 0.5f) {
 							_last_progress = progress;
 							PX4_ERR("resetting progress. Acceptance radius is zero!");
 						}
@@ -1203,7 +1202,11 @@ void MulticopterPositionControl::control_auto(float dt)
 			_att_sp.yaw_body = _att_sp.yaw_body + _pos_sp_triplet.current.yawspeed * dt;
 
 		} else if (PX4_ISFINITE(_pos_sp_triplet.current.yaw)) {
-			if (_params.yaw_mode == MPC_YAWMODE_INTERPOLATE && PX4_ISFINITE(_pos_sp_triplet.current.yaw) && PX4_ISFINITE(_pos_sp_triplet.previous.yaw)){
+			if (_params.yaw_mode == MPC_YAWMODE_INTERPOLATE
+				&& _pos_sp_triplet.previous.valid
+				&& _pos_sp_triplet.current.valid
+				&& PX4_ISFINITE(_pos_sp_triplet.current.yaw)
+				&& PX4_ISFINITE(_pos_sp_triplet.previous.yaw)){
 
 				// check which turning direction is closer
 				bool do_wrap = false;
@@ -1213,17 +1216,15 @@ void MulticopterPositionControl::control_auto(float dt)
 				}
 
 				if (!do_wrap) {
-					_att_sp.yaw_body = progress * _pos_sp_triplet.current.yaw + (1.0 - progress) * _pos_sp_triplet.previous.yaw;
-					// PX4_ERR("clockwise");
-				} else { // rotate counter clockise
-					_att_sp.yaw_body = progress * (2 * M_PI_F + _pos_sp_triplet.current.yaw) + (1.0 - progress) * _pos_sp_triplet.previous.yaw;
-					// PX4_ERR("counter clockwise");
+					_att_sp.yaw_body = progress * _pos_sp_triplet.current.yaw + (1.0f - progress) * _pos_sp_triplet.previous.yaw;
+				} else {
+					_att_sp.yaw_body = progress * (2.0f * M_PI_F + _pos_sp_triplet.current.yaw) + (1.0f - progress) * _pos_sp_triplet.previous.yaw;
 				}
 				_att_sp.yaw_body = _wrap_pi(_att_sp.yaw_body);
 
 				static int printcnt = 0;
 				if (printcnt % 100 == 0)
-					PX4_ERR("%s progress %.3f, yaw [%.3f -> %.3f] setp %f", do_wrap ? "wrapping" : "        ", progress, _pos_sp_triplet.previous.yaw, _pos_sp_triplet.current.yaw, _att_sp.yaw_body);
+					PX4_ERR("%s progress %.3f, yaw [%.3f -> %.3f] setp %f", do_wrap ? "wrapping" : "        ", (double)progress, (double)_pos_sp_triplet.previous.yaw, (double)_pos_sp_triplet.current.yaw, (double)_att_sp.yaw_body);
 				printcnt++;
 
 			} else {
