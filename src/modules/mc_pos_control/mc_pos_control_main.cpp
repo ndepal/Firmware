@@ -274,7 +274,9 @@ private:
 	float _acc_z_lp;
 	float _takeoff_thrust_sp;
 	bool control_vel_enabled_prev;	/**< previous loop was in velocity controlled mode (control_state.flag_control_velocity_enabled) */
-	float _last_progress; /**< the progress along the segment between two waypoints */
+	float _starting_yaw; /**< starting point for the yaw setpoint interpolation */
+	float _last_progress; /**< the progress along the segment between two waypoints, used for yaw setpoint interpolation */
+	math::Vector<3> _last_sp; /**< the setpoint that was set in the last loop. used to detect when a new waypoint is targeted */
 
 	/**
 	 * Update our local parameter cache.
@@ -418,6 +420,7 @@ MulticopterPositionControl::MulticopterPositionControl() :
 	_acc_z_lp(0),
 	_takeoff_thrust_sp(0.0f),
 	control_vel_enabled_prev(false),
+	_starting_yaw(0.0),
 	_last_progress(0.0)
 {
 	// Make the quaternion valid for control state
@@ -442,6 +445,8 @@ MulticopterPositionControl::MulticopterPositionControl() :
 	_vel_ff.zero();
 	_vel_sp_prev.zero();
 	_vel_err_d.zero();
+
+	_last_sp.zero();
 
 	_R.identity();
 
@@ -1100,20 +1105,13 @@ void MulticopterPositionControl::control_auto(float dt)
 				// calculate how far we are along the "previous - current" line
 				progress = math::constrain(1.0f - curr_pos_s_len/prev_curr_s_len, 0.0f, 1.0f);
 				if (progress < _last_progress) {
-					// progress should increase monotonically except when switching to a new waypoint, where it jumps down to 0
-					if (_pos_sp_triplet.current.acceptance_radius > 0.0f) {
-						if (progress < 0.1f && curr_pos_s_len < 1.2f * _pos_sp_triplet.current.acceptance_radius * scale.length()) {
-							// progress is small because we are tracking a new waypoint
-							_last_progress = progress;
-							PX4_ERR("resetting progress");
-						}
-					} else { // cant do check with acceptance_radius because its not set properly
-						if (progress < 0.1f && _last_progress > 0.5f) {
-							_last_progress = progress;
-							PX4_ERR("resetting progress. Acceptance radius is zero!");
-						}
+					if ((curr_sp - _last_sp).length() > 0.001) { // different setpoint, therefore also different waypoint
+						PX4_WARN("resetting, progress %f", progress);
+						_last_progress = progress;
+						_last_sp = curr_sp;
+						_starting_yaw = _att_sp.yaw_body; // start at previous yaw setpoint to avoid setpoint jumps
 					}
-					progress = _last_progress; // make sure progress increases monotonically
+					progress = _last_progress;
 				}
 				_last_progress = progress;
 
@@ -1203,32 +1201,36 @@ void MulticopterPositionControl::control_auto(float dt)
 
 		} else if (PX4_ISFINITE(_pos_sp_triplet.current.yaw)) {
 			if (_params.yaw_mode == MPC_YAWMODE_INTERPOLATE
+				&& _pos_sp_triplet.current.type == position_setpoint_s::SETPOINT_TYPE_POSITION
 				&& _pos_sp_triplet.previous.valid
 				&& _pos_sp_triplet.current.valid
 				&& PX4_ISFINITE(_pos_sp_triplet.current.yaw)
-				&& PX4_ISFINITE(_pos_sp_triplet.previous.yaw)){
+				&& PX4_ISFINITE(_starting_yaw)){
 
 				// check which turning direction is closer
+				// instead of interpolating between the two yaw setpoints defined in the waypoints,
+				// we interpolate between the yaw setpoint just before we started targetting a new waypoint and that waypoint's setpoint.
+				// This gives smoother yaw setpoints
 				bool do_wrap = false;
-				float yaw_diff = _pos_sp_triplet.current.yaw - _pos_sp_triplet.previous.yaw;
+				float yaw_diff = _pos_sp_triplet.current.yaw - _starting_yaw;
 				if (yaw_diff > M_PI_F || yaw_diff < -M_PI_F) {
 					do_wrap = true;
 				}
 
 				if (!do_wrap) {
-					_att_sp.yaw_body = progress * _pos_sp_triplet.current.yaw + (1.0f - progress) * _pos_sp_triplet.previous.yaw;
+					_att_sp.yaw_body = progress * _pos_sp_triplet.current.yaw + (1.0f - progress) * _starting_yaw;
 				} else {
-					if (_pos_sp_triplet.current.yaw < _pos_sp_triplet.previous.yaw) {
-						_att_sp.yaw_body = progress * (_pos_sp_triplet.current.yaw + 2.0f * M_PI_F) + (1.0f - progress) * _pos_sp_triplet.previous.yaw;
+					if (_pos_sp_triplet.current.yaw < _starting_yaw) {
+						_att_sp.yaw_body = progress * (_pos_sp_triplet.current.yaw + 2.0f * M_PI_F) + (1.0f - progress) * _starting_yaw;
 					} else {
-						_att_sp.yaw_body = progress * (_pos_sp_triplet.current.yaw - 2.0f * M_PI_F) + (1.0f - progress) * _pos_sp_triplet.previous.yaw;
+						_att_sp.yaw_body = progress * (_pos_sp_triplet.current.yaw - 2.0f * M_PI_F) + (1.0f - progress) * _starting_yaw;
 					}
 				}
 				_att_sp.yaw_body = _wrap_pi(_att_sp.yaw_body);
 
 				static int printcnt = 0;
-				if (printcnt % 100 == 0) {
-					PX4_ERR("%s progress %.3f, yaw [%.3f -> %.3f] setp %f", do_wrap ? "wrapping" : "        ", (double)progress, (double)_pos_sp_triplet.previous.yaw, (double)_pos_sp_triplet.current.yaw, (double)_att_sp.yaw_body);
+				if (printcnt % 10 == 0) {
+					PX4_ERR("%s progress %.3f, yaw [%.3f -> %.3f] setp %f", do_wrap ? "wrapping" : "        ", (double)progress, (double)_starting_yaw, (double)_pos_sp_triplet.current.yaw, (double)_att_sp.yaw_body);
 				}
 				printcnt++;
 
