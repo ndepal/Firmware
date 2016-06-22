@@ -276,6 +276,7 @@ private:
 	bool control_vel_enabled_prev;	/**< previous loop was in velocity controlled mode (control_state.flag_control_velocity_enabled) */
 	float _starting_yaw; /**< starting point for the yaw setpoint interpolation */
 	float _last_progress; /**< the progress along the segment between two waypoints, used for yaw setpoint interpolation */
+	float _progress_offset; /**< if the computed progress at the beginning of a waypoint segment is > 0.0, we subtract this offset for smooth yaw interpolation */
 	math::Vector<3> _last_sp; /**< the setpoint that was set in the last loop. used to detect when a new waypoint is targeted */
 
 	/**
@@ -421,7 +422,8 @@ MulticopterPositionControl::MulticopterPositionControl() :
 	_takeoff_thrust_sp(0.0f),
 	control_vel_enabled_prev(false),
 	_starting_yaw(0.0),
-	_last_progress(0.0)
+	_last_progress(0.0),
+	_progress_offset(0.0)
 {
 	// Make the quaternion valid for control state
 	_ctrl_state.q[0] = 1.0f;
@@ -1105,13 +1107,17 @@ void MulticopterPositionControl::control_auto(float dt)
 				// calculate how far we are along the "previous - current" line
 				progress = math::constrain(1.0f - curr_pos_s_len/prev_curr_s_len, 0.0f, 1.0f);
 				if (progress < _last_progress) {
-					if ((curr_sp - _last_sp).length() > 0.001) { // different setpoint, therefore also different waypoint
-						PX4_WARN("resetting, progress %f", progress);
+					if ((curr_sp - _last_sp).length() > 0.001f) { // different setpoint, therefore also different waypoint
+						PX4_WARN("resetting, progress %f", (double)progress);
 						_last_progress = progress;
 						_last_sp = curr_sp;
 						_starting_yaw = _att_sp.yaw_body; // start at previous yaw setpoint to avoid setpoint jumps
+						_progress_offset = progress;
 					}
 					progress = _last_progress;
+				}
+				if (_progress_offset < 0.99f) {
+					progress = math::constrain((progress - _progress_offset)/(1.0f - _progress_offset), 0.0f, 1.0f);
 				}
 				_last_progress = progress;
 
