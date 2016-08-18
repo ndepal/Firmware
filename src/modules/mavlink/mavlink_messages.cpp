@@ -89,6 +89,7 @@
 #include <uORB/topics/vision_position_estimate.h>
 #include <uORB/topics/vtol_vehicle_status.h>
 #include <uORB/topics/wind_estimate.h>
+#include <uORB/topics/gps_rtk_base_status.h>
 #include <uORB/uORB.h>
 
 
@@ -3444,6 +3445,74 @@ protected:
 	}
 };
 
+class MavlinkStreamGPSRTKBaseStatus : public MavlinkStream
+{
+public:
+    const char *get_name() const
+    {
+        return MavlinkStreamGPSRTKBaseStatus::get_name_static();
+    }
+    static const char *get_name_static()
+    {
+        return "GPS_RTK_BASE_STATUS";
+    }
+	static uint8_t get_id_static()
+	{
+		return MAVLINK_MSG_ID_GPS_RTK_BASE_STATUS;
+	}
+	uint8_t get_id()
+	{
+		return get_id_static();
+	}
+
+    static MavlinkStream *new_instance(Mavlink *mavlink)
+    {
+        return new MavlinkStreamGPSRTKBaseStatus(mavlink);
+    }
+
+    unsigned get_size()
+    {
+		return (_gps_rtk_base_status_time > 0) ? MAVLINK_MSG_ID_GPS_RTK_BASE_STATUS_LEN + MAVLINK_NUM_NON_PAYLOAD_BYTES : 0;
+    }
+
+private:
+    MavlinkOrbSubscription *_sub;
+    uint64_t _gps_rtk_base_status_time;
+
+    /* do not allow top copying this class */
+    MavlinkStreamGPSRTKBaseStatus(MavlinkStreamGPSRTKBaseStatus &);
+    MavlinkStreamGPSRTKBaseStatus& operator = (const MavlinkStreamGPSRTKBaseStatus &);
+	orb_advert_t _mavlink_log_pub;
+
+protected:
+    explicit MavlinkStreamGPSRTKBaseStatus(Mavlink *mavlink) : MavlinkStream(mavlink),
+        _sub(_mavlink->add_orb_subscription(ORB_ID(gps_rtk_base_status))),
+        _gps_rtk_base_status_time(0),
+		_mavlink_log_pub(nullptr)
+    {}
+
+    void send(const hrt_abstime t)
+    {
+        struct gps_rtk_base_status_s msg_uorb;
+
+        if (_sub->update(&_gps_rtk_base_status_time, &msg_uorb)) {
+            mavlink_gps_rtk_base_status_t msg_mavlink;
+
+			msg_mavlink.lat = msg_uorb.lat * (float)1e7;
+			msg_mavlink.lon = msg_uorb.lon * (float)1e7;
+			msg_mavlink.alt = msg_uorb.alt * (float)1e3;
+			msg_mavlink.surveyin_dur = msg_uorb.surveyin_dur;
+			msg_mavlink.surveyin_acc = msg_uorb.surveyin_acc;
+			msg_mavlink.flags = msg_uorb.flags;
+			msg_mavlink.cnt = msg_uorb.cnt;
+
+			// mavlink_msg_gps_rtk_base_status_send_struct(_mavlink->get_channel(), &msg_mavlink);
+			// XXX severe HACK!
+			mavlink_msg_landing_target_send_struct(_mavlink->get_channel(), (mavlink_landing_target_t*)&msg_mavlink);
+        }
+    }
+};
+
 const StreamListItem *streams_list[] = {
 	new StreamListItem(&MavlinkStreamHeartbeat::new_instance, &MavlinkStreamHeartbeat::get_name_static, &MavlinkStreamHeartbeat::get_id_static),
 	new StreamListItem(&MavlinkStreamStatustext::new_instance, &MavlinkStreamStatustext::get_name_static, &MavlinkStreamStatustext::get_id_static),
@@ -3488,5 +3557,6 @@ const StreamListItem *streams_list[] = {
 	new StreamListItem(&MavlinkStreamAltitude::new_instance, &MavlinkStreamAltitude::get_name_static, &MavlinkStreamAltitude::get_id_static),
 	new StreamListItem(&MavlinkStreamADSBVehicle::new_instance, &MavlinkStreamADSBVehicle::get_name_static, &MavlinkStreamADSBVehicle::get_id_static),
 	new StreamListItem(&MavlinkStreamWind::new_instance, &MavlinkStreamWind::get_name_static, &MavlinkStreamWind::get_id_static),
+	new StreamListItem(&MavlinkStreamGPSRTKBaseStatus::new_instance, &MavlinkStreamGPSRTKBaseStatus::get_name_static, &MavlinkStreamGPSRTKBaseStatus::get_id_static),
 	nullptr
 };

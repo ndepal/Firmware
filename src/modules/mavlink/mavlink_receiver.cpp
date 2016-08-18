@@ -127,6 +127,7 @@ MavlinkReceiver::MavlinkReceiver(Mavlink *parent) :
 	_follow_target_pub(nullptr),
 	_transponder_report_pub(nullptr),
 	_gps_inject_data_pub(nullptr),
+	_gps_rtk_base_status_pub(nullptr),
 	_control_mode_sub(orb_subscribe(ORB_ID(vehicle_control_mode))),
 	_hil_frames(0),
 	_old_timestamp(0),
@@ -143,7 +144,8 @@ MavlinkReceiver::MavlinkReceiver(Mavlink *parent) :
 	_time_offset(0),
 	_orb_class_instance(-1),
 	_mom_switch_pos{},
-	_mom_switch_state(0)
+	_mom_switch_state(0),
+	_mavlink_log_pub(nullptr)
 {
 }
 
@@ -160,6 +162,8 @@ MavlinkReceiver::handle_message(mavlink_message_t *msg)
 			_mavlink->set_config_link_on(true);
 		}
 	}
+
+	// PX4_WARN("msg id %d", (int)msg->msgid);
 
 	switch (msg->msgid) {
 	case MAVLINK_MSG_ID_COMMAND_LONG:
@@ -259,11 +263,17 @@ MavlinkReceiver::handle_message(mavlink_message_t *msg)
 		break;
 
 	case MAVLINK_MSG_ID_BATTERY_STATUS:
-		handle_message_battery_status(msg);
+		// handle_message_battery_status(msg);
+		handle_message_gps_rtk_base_status(msg);
 		break;
 
 	case MAVLINK_MSG_ID_SERIAL_CONTROL:
 		handle_message_serial_control(msg);
+		break;
+
+	case MAVLINK_MSG_ID_GPS_RTK_BASE_STATUS:
+		PX4_WARN("GOT RTK message");
+		// handle_message_gps_rtk_base_status(msg);
 		break;
 
 	default:
@@ -1221,6 +1231,34 @@ MavlinkReceiver::handle_message_serial_control(mavlink_message_t *msg)
 	}
 }
 
+void
+MavlinkReceiver::handle_message_gps_rtk_base_status(mavlink_message_t *msg)
+{
+	mavlink_gps_rtk_base_status_t msg_mavlink;
+	mavlink_msg_gps_rtk_base_status_decode(msg, &msg_mavlink);
+
+	struct gps_rtk_base_status_s msg_uorb;
+	memset(&msg_uorb, 0, sizeof(msg_uorb));
+
+	msg_uorb.timestamp = hrt_absolute_time();
+	msg_uorb.lat = msg_mavlink.lat * 1e-7;
+	msg_uorb.lon = msg_mavlink.lon * 1e-7;
+	msg_uorb.alt = msg_mavlink.alt * 1e-3;
+	msg_uorb.surveyin_dur = msg_mavlink.surveyin_dur;
+	msg_uorb.surveyin_acc = msg_mavlink.surveyin_acc;
+	msg_uorb.flags = msg_mavlink.flags;
+	msg_uorb.cnt = msg_mavlink.cnt;
+	//TODO add the other fields
+
+	// PX4_WARN("RTK lat %f lon %f alt %f, survey-in dur %d acc %d flags %d cnt %d", (float)msg_mavlink.lat, (float)msg_mavlink.lon, (float)msg_mavlink.alt, (int)msg_mavlink.surveyin_dur, (int)msg_mavlink.surveyin_acc, (int)msg_mavlink.flags, (int)msg_mavlink.cnt);
+	if (_gps_rtk_base_status_pub == nullptr) {
+		_gps_rtk_base_status_pub = orb_advertise(ORB_ID(gps_rtk_base_status), &msg_uorb);
+
+	} else {
+		orb_publish(ORB_ID(gps_rtk_base_status), _gps_rtk_base_status_pub, &msg_uorb);
+	}
+}
+
 switch_pos_t
 MavlinkReceiver::decode_switch_pos(uint16_t buttons, unsigned sw)
 {
@@ -2165,7 +2203,7 @@ MavlinkReceiver::receive_thread(void *arg)
 
 #endif
 			// only start accepting messages once we're sure who we talk to
-
+			bool parsed = false;
 			if (_mavlink->get_client_source_initialized()) {
 				/* if read failed, this loop won't execute */
 				for (ssize_t i = 0; i < nread; i++) {
@@ -2182,6 +2220,9 @@ MavlinkReceiver::receive_thread(void *arg)
 
 						/* handle packet with parent object */
 						_mavlink->handle_message(&msg);
+						parsed = true;
+					} else {
+						// PX4_WARN("parse false");
 					}
 				}
 
@@ -2189,8 +2230,15 @@ MavlinkReceiver::receive_thread(void *arg)
 				if (nread > 0) {
 					_mavlink->count_rxbytes(nread);
 				}
+			} else {
+				PX4_WARN("client source not initialized");
+			}
+			if (!parsed) {
+				PX4_WARN("Could not parse this message");
 			}
 		}
+
+		// PX4_WARN("----------");
 	}
 
 	return nullptr;

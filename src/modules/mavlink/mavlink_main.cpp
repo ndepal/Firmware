@@ -467,7 +467,7 @@ Mavlink::get_status_all_instances()
 
 	while (inst != nullptr) {
 
-		printf("\ninstance #%u:\n", iterations);
+		printf("\ninstance #%u: %s\n", iterations, inst->_device_name);
 		inst->display_status();
 
 		/* move on */
@@ -2454,6 +2454,12 @@ Mavlink::display_status()
 	printf("\trx: %.3f kB/s\n", (double)_rate_rx);
 	printf("\trate mult: %.3f\n", (double)_rate_mult);
 	printf("\taccepting commands: %s\n", (accepting_commands()) ? "YES" : "NO");
+
+	MavlinkStream *stream;
+	printf("\tConfigured streams:\n");
+	LL_FOREACH(_streams, stream) {
+		printf("\t\t%s (%u)\t%uHz\n", stream->get_name(), stream->get_id(), stream->get_interval());
+	}
 }
 
 int
