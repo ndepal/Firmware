@@ -199,7 +199,6 @@ private:
 		param_t acc_hor_max;
 		param_t alt_mode;
 		param_t opt_recover;
-		param_t yaw_mode;
 
 	}		_params_handles;		/**< handles for interesting parameters */
 
@@ -225,7 +224,6 @@ private:
 		float vel_max_up;
 		float vel_max_down;
 		uint32_t alt_mode;
-		uint32_t yaw_mode;
 
 		int opt_recover;
 
@@ -238,11 +236,6 @@ private:
 		math::Vector<3> vel_cruise;
 		math::Vector<3> sp_offs_max;
 	}		_params;
-
-	enum mpc_yaw_mode {
-		MPC_YAWMODE_NONE = 0,
-		MPC_YAWMODE_INTERPOLATE = 1
-	};
 
 	struct map_projection_reference_s _ref_pos;
 	float _ref_alt;
@@ -274,10 +267,6 @@ private:
 	float _acc_z_lp;
 	float _takeoff_thrust_sp;
 	bool control_vel_enabled_prev;	/**< previous loop was in velocity controlled mode (control_state.flag_control_velocity_enabled) */
-	float _starting_yaw; /**< starting point for the yaw setpoint interpolation */
-	float _last_progress; /**< the progress along the segment between two waypoints, used for yaw setpoint interpolation */
-	float _progress_offset; /**< if the computed progress at the beginning of a waypoint segment is > 0.0, we subtract this offset for smooth yaw interpolation */
-	math::Vector<3> _last_sp; /**< the setpoint that was set in the last loop. used to detect when a new waypoint is targeted */
 
 	/**
 	 * Update our local parameter cache.
@@ -420,10 +409,7 @@ MulticopterPositionControl::MulticopterPositionControl() :
 	_vel_z_lp(0),
 	_acc_z_lp(0),
 	_takeoff_thrust_sp(0.0f),
-	control_vel_enabled_prev(false),
-	_starting_yaw(0.0),
-	_last_progress(0.0),
-	_progress_offset(0.0)
+	control_vel_enabled_prev(false)
 {
 	// Make the quaternion valid for control state
 	_ctrl_state.q[0] = 1.0f;
@@ -447,8 +433,6 @@ MulticopterPositionControl::MulticopterPositionControl() :
 	_vel_ff.zero();
 	_vel_sp_prev.zero();
 	_vel_err_d.zero();
-
-	_last_sp.zero();
 
 	_R.identity();
 
@@ -494,7 +478,6 @@ MulticopterPositionControl::MulticopterPositionControl() :
 	_params_handles.acc_hor_max = param_find("MPC_ACC_HOR_MAX");
 	_params_handles.alt_mode = param_find("MPC_ALT_MODE");
 	_params_handles.opt_recover = param_find("VT_OPT_RECOV_EN");
-	_params_handles.yaw_mode = param_find("MPC_YAW_MODE");
 
 	/* fetch initial parameter values */
 	parameters_update(true);
@@ -612,8 +595,6 @@ MulticopterPositionControl::parameters_update(bool force)
 		_params.acc_hor_max = math::max(_params.vel_cruise(0), _params.acc_hor_max);
 		param_get(_params_handles.alt_mode, &v_i);
 		_params.alt_mode = v_i;
-		param_get(_params_handles.yaw_mode, &v_i);
-		_params.yaw_mode = v_i;
 
 		int i;
 		param_get(_params_handles.opt_recover, &i);
@@ -1067,8 +1048,6 @@ void MulticopterPositionControl::control_auto(float dt)
 		}
 	}
 
-	float progress = 0.0; // progress along the way between the two waypoints
-
 	if (current_setpoint_valid) {
 		/* scaled space: 1 == position error resulting max allowed speed */
 
@@ -1102,24 +1081,6 @@ void MulticopterPositionControl::control_auto(float dt)
 				math::Vector<3> prev_curr_s = curr_sp_s - prev_sp_s;
 				math::Vector<3> curr_pos_s = pos_s - curr_sp_s;
 				float curr_pos_s_len = curr_pos_s.length();
-				float prev_curr_s_len = prev_curr_s.length();
-
-				// calculate how far we are along the "previous - current" line
-				progress = math::constrain(1.0f - curr_pos_s_len/prev_curr_s_len, 0.0f, 1.0f);
-				if (progress < _last_progress) {
-					if ((curr_sp - _last_sp).length() > 0.001f) { // different setpoint, therefore also different waypoint
-						PX4_WARN("resetting, progress %f", (double)progress);
-						_last_progress = progress;
-						_last_sp = curr_sp;
-						_starting_yaw = _att_sp.yaw_body; // start at previous yaw setpoint to avoid setpoint jumps
-						_progress_offset = progress;
-					}
-					progress = _last_progress;
-				}
-				if (_progress_offset < 0.99f) {
-					progress = math::constrain((progress - _progress_offset)/(1.0f - _progress_offset), 0.0f, 1.0f);
-				}
-				_last_progress = progress;
 
 				if (curr_pos_s_len < 1.0f) {
 					/* copter is closer to waypoint than unit radius */
@@ -1206,43 +1167,7 @@ void MulticopterPositionControl::control_auto(float dt)
 			_att_sp.yaw_body = _att_sp.yaw_body + _pos_sp_triplet.current.yawspeed * dt;
 
 		} else if (PX4_ISFINITE(_pos_sp_triplet.current.yaw)) {
-			if (_params.yaw_mode == MPC_YAWMODE_INTERPOLATE
-				&& _pos_sp_triplet.current.type == position_setpoint_s::SETPOINT_TYPE_POSITION
-				&& _pos_sp_triplet.previous.valid
-				&& _pos_sp_triplet.current.valid
-				&& PX4_ISFINITE(_pos_sp_triplet.current.yaw)
-				&& PX4_ISFINITE(_starting_yaw)){
-
-				// check which turning direction is closer
-				// instead of interpolating between the two yaw setpoints defined in the waypoints,
-				// we interpolate between the yaw setpoint just before we started targetting a new waypoint and that waypoint's setpoint.
-				// This gives smoother yaw setpoints
-				bool do_wrap = false;
-				float yaw_diff = _pos_sp_triplet.current.yaw - _starting_yaw;
-				if (yaw_diff > M_PI_F || yaw_diff < -M_PI_F) {
-					do_wrap = true;
-				}
-
-				if (!do_wrap) {
-					_att_sp.yaw_body = progress * _pos_sp_triplet.current.yaw + (1.0f - progress) * _starting_yaw;
-				} else {
-					if (_pos_sp_triplet.current.yaw < _starting_yaw) {
-						_att_sp.yaw_body = progress * (_pos_sp_triplet.current.yaw + 2.0f * M_PI_F) + (1.0f - progress) * _starting_yaw;
-					} else {
-						_att_sp.yaw_body = progress * (_pos_sp_triplet.current.yaw - 2.0f * M_PI_F) + (1.0f - progress) * _starting_yaw;
-					}
-				}
-				_att_sp.yaw_body = _wrap_pi(_att_sp.yaw_body);
-
-				static int printcnt = 0;
-				if (printcnt % 10 == 0) {
-					PX4_ERR("%s progress %.3f, yaw [%.3f -> %.3f] setp %f", do_wrap ? "wrapping" : "        ", (double)progress, (double)_starting_yaw, (double)_pos_sp_triplet.current.yaw, (double)_att_sp.yaw_body);
-				}
-				printcnt++;
-
-			} else {
-				_att_sp.yaw_body = _pos_sp_triplet.current.yaw;
-			}
+			_att_sp.yaw_body = _pos_sp_triplet.current.yaw;
 		}
 
 		/*

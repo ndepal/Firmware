@@ -468,18 +468,3 @@ PARAM_DEFINE_FLOAT(MPC_ACC_HOR_MAX, 5.0f);
  * @group Multicopter Position Control
  */
 PARAM_DEFINE_INT32(MPC_ALT_MODE, 0);
-
-/**
- * Yaw control mode
- *
- * When yawing according to mission waypoints (MIS_YAWMODE set to "Heading as set by waypoint"),
- * either discretely switch to new yaw setpoint upon reaching a waypoint
- * or smoothly interpolate between the two setpoints while moving from one waypoint to the next.
- *
- * @min 0
- * @max 1
- * @value 0 Discrete setpoint switching
- * @value 1 Setpoint interpolation
- * @group Multicopter Position Control
- */
-PARAM_DEFINE_INT32(MPC_YAW_MODE, 0);

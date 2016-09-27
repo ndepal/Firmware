@@ -89,7 +89,8 @@ public:
 		MISSION_YAWMODE_FRONT_TO_WAYPOINT = 1,
 		MISSION_YAWMODE_FRONT_TO_HOME = 2,
 		MISSION_YAWMODE_BACK_TO_HOME = 3,
-		MISSION_YAWMODE_MAX = 4
+		MISSION_YAWMODE_FOH = 4,
+		MISSION_YAWMODE_MAX = 5
 	};
 
 private:
@@ -153,6 +154,9 @@ private:
 	 * Updates the heading of the vehicle. Rotary wings only.
 	 */
 	void heading_sp_update();
+
+	void heading_sp_foh_reset();
+	void heading_sp_foh_update();
 
 	/**
 	 * Updates the altitude sp to follow a foh
@@ -259,6 +263,7 @@ private:
 	float _min_current_sp_distance_xy; /**< minimum distance which was achieved to the current waypoint  */
 	float _mission_item_previous_alt; /**< holds the altitude of the previous mission item,
 					    can be replaced by a full copy of the previous mission item if needed */
+	float _mission_item_previous_yaw;
 	float _on_arrival_yaw; /**< holds the yaw value that should be applied when the current waypoint is reached */
 	float _distance_current_previous; /**< distance from previous to current sp in pos_sp_triplet,
 					    only use if current and previous are valid */

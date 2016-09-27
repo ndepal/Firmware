@@ -116,14 +116,15 @@ PARAM_DEFINE_INT32(MIS_ALTMODE, 1);
 /**
  * Multirotor only. Yaw setpoint mode.
  *
- * The values are defined in the enum mission_altitude_mode
+ * The values are defined in the enum mission_yaw_mode
  *
  * @min 0
- * @max 3
+ * @max 4
  * @value 0 Heading as set by waypoint
  * @value 1 Heading towards waypoint
  * @value 2 Heading towards home
  * @value 3 Heading away from home
+ * @value 4 Heading as set by waypoint, FOH
  * @group Mission
  */
 PARAM_DEFINE_INT32(MIS_YAWMODE, 1);

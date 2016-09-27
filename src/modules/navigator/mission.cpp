@@ -87,6 +87,7 @@ Mission::Mission(Navigator *navigator, const char *name) :
 	_missionFeasibilityChecker(),
 	_min_current_sp_distance_xy(FLT_MAX),
 	_mission_item_previous_alt(NAN),
+	_mission_item_previous_yaw(NAN),
 	_distance_current_previous(0.0f),
 	_work_item_type(WORK_ITEM_TYPE_DEFAULT)
 {
@@ -233,7 +234,11 @@ Mission::on_active()
 	     && _mission_type != MISSION_TYPE_NONE)
 	    || _navigator->get_vstatus()->is_vtol) {
 
-		heading_sp_update();
+		if (_param_yawmode.get() == MISSION_YAWMODE_FOH) {
+			heading_sp_foh_update();
+		} else {
+			heading_sp_update();
+		}
 	}
 
 	/* check if landing needs to be aborted */
@@ -384,6 +389,7 @@ Mission::set_mission_items()
 
 	/* reset the altitude foh (first order hold) logic, if altitude foh is enabled (param) a new foh element starts now */
 	altitude_sp_foh_reset();
+	heading_sp_foh_reset();
 
 	struct position_setpoint_triplet_s *pos_sp_triplet = _navigator->get_position_setpoint_triplet();
 
@@ -400,6 +406,7 @@ Mission::set_mission_items()
 	if (item_contains_position(&_mission_item) && pos_sp_triplet->current.valid) {
 		/* Copy previous mission item altitude */
 		_mission_item_previous_alt = get_absolute_altitude_for_item(_mission_item);
+		_mission_item_previous_yaw = _mission_item.yaw;
 	}
 
 	/* try setting onboard mission item */
@@ -981,6 +988,78 @@ Mission::altitude_sp_foh_update()
 void
 Mission::altitude_sp_foh_reset()
 {
+	_min_current_sp_distance_xy = FLT_MAX;
+}
+
+void
+Mission::heading_sp_foh_update()
+{
+	struct position_setpoint_triplet_s *pos_sp_triplet = _navigator->get_position_setpoint_triplet();
+
+	/* Don't change setpoint if last and current waypoint are not valid */
+	if (!pos_sp_triplet->previous.valid || !pos_sp_triplet->current.valid ||
+		!PX4_ISFINITE(_mission_item_previous_yaw)) {
+			// warnx("valid %d %d %d", pos_sp_triplet->previous.valid, pos_sp_triplet->current.valid, PX4_ISFINITE(_mission_item_previous_yaw));
+		return;
+	}
+
+	/* Do not try to find a solution if the last waypoint is inside the acceptance radius of the current one */
+	if (_distance_current_previous - _navigator->get_acceptance_radius(/*_mission_item.acceptance_radius XXX not set properly*/) < FLT_EPSILON) {
+		// TODO just set new yaw setpoint here? not needed, why not?
+		return;
+	}
+
+	/* Don't do FOH for non-missions, landing and takeoff waypoints
+	 *
+	 * */
+	if (_mission_item.nav_cmd == NAV_CMD_LAND
+		|| _mission_item.nav_cmd == NAV_CMD_VTOL_LAND
+		|| _mission_item.nav_cmd == NAV_CMD_TAKEOFF
+		|| _mission_item.nav_cmd == NAV_CMD_LOITER_TO_ALT
+		|| !_navigator->is_planned_mission()) {
+		return;
+	}
+
+	/* Calculate distance to current waypoint */
+	float d_current = get_distance_to_next_waypoint(_mission_item.lat, _mission_item.lon,
+			  _navigator->get_global_position()->lat, _navigator->get_global_position()->lon);
+
+	/* Save distance to waypoint if it is the smallest ever achieved, however make sure that
+	 * _min_current_sp_distance_xy is never larger than the distance between the current and the previous wp */
+	_min_current_sp_distance_xy = math::min(math::min(d_current, _min_current_sp_distance_xy),
+						_distance_current_previous);
+
+	/* if the minimal distance is smaller then the acceptance radius, we should be at waypoint alt
+	 * navigator will soon switch to the next waypoint item (if there is one) as soon as we reach this altitude */
+	if (_min_current_sp_distance_xy < _navigator->get_acceptance_radius(/*_mission_item.acceptance_radius XXX not set properly*/)) {
+		pos_sp_triplet->current.yaw = _mission_item.yaw;
+	} else {
+		/* update the yaw sp of the 'current' item in the sp triplet, but do not update the yaw sp
+		* of the mission item as it is used to check if the mission item is reached
+		* The setpoint is set linearly and such that the system reaches the current yaw at the acceptance
+		* radius around the current waypoint
+		**/
+
+		///
+		float yaw_diff = _wrap_pi(_mission_item.yaw - _mission_item_previous_yaw);
+
+		float grad = -yaw_diff / (_distance_current_previous - _navigator->get_acceptance_radius(/*_mission_item.acceptance_radius XXX not set properly*/));
+		pos_sp_triplet->current.yaw = _wrap_pi(_mission_item_previous_yaw + grad * (_min_current_sp_distance_xy - _distance_current_previous));
+
+		// static int printcnt = 0;
+		// if (printcnt % 10 == 0) {
+		// 	PX4_ERR("progress %.3f, yaw [%.3f -> %.3f] setp %f", (double)(_distance_current_previous-_min_current_sp_distance_xy)/(_distance_current_previous - _navigator->get_acceptance_radius(/*_mission_item.acceptance_radius XXX not set properly*/)), (double)_mission_item_previous_yaw, (double)_mission_item.yaw, (double)pos_sp_triplet->current.yaw);
+		// }
+		// printcnt++;
+	}
+
+	_navigator->set_position_setpoint_triplet_updated();
+}
+
+void
+Mission::heading_sp_foh_reset()
+{
+	// use the same min distance variable as altitude FOH
 	_min_current_sp_distance_xy = FLT_MAX;
 }
 
