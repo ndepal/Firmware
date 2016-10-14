@@ -124,6 +124,7 @@ set(config_module_list
 	modules/systemlib/mixer
 	modules/uORB
 	modules/dataman
+	modules/stack_watchdog
 
 	#
 	# Libraries
