@@ -65,7 +65,7 @@ mavlink start -u 14556 -r 4000000
 mavlink start -u 14557 -r 4000000 -m onboard -o 14540
 mavlink stream -r 50 -s POSITION_TARGET_LOCAL_NED -u 14556
 mavlink stream -r 50 -s LOCAL_POSITION_NED -u 14556
-mavlink stream -r 50 -s GLOBAL_POSITION_INT -u 14556
+mavlink stream -r 5 -s GLOBAL_POSITION_INT -u 14556
 mavlink stream -r 50 -s ATTITUDE -u 14556
 mavlink stream -r 50 -s ATTITUDE_QUATERNION -u 14556
 mavlink stream -r 50 -s ATTITUDE_TARGET -u 14556

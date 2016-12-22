@@ -73,6 +73,8 @@ mavlink stream -r 50 -s SERVO_OUTPUT_RAW_0 -u 14556
 mavlink stream -r 20 -s RC_CHANNELS -u 14556
 mavlink stream -r 250 -s HIGHRES_IMU -u 14556
 mavlink stream -r 10 -s OPTICAL_FLOW_RAD -u 14556
+mavlink stream -r 10 -s GPS_RTK_BASE_STATUS -u 14557
+mavlink stream -r 10 -s GPS_RAW_INT -u 14557
 sdlog2 start -r 100 -e -t -a
 mavlink boot_complete
 replay trystart

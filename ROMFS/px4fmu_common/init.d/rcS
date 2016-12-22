@@ -629,6 +629,8 @@ then
 	then
 		# Check for flow sensor - as it is a background task, launch it last
 		px4flow start &
+		mavlink stream -r 10 -s DISTANCE_SENSOR -d /dev/ttyS1
+		mavlink stream -r 10 -s DISTANCE_SENSOR -d /dev/ttyS2
 	fi
 
 	if ver hwcmp MINDPX_V2
