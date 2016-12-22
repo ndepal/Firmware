@@ -113,6 +113,7 @@ public:
 
 	virtual ssize_t		read(struct file *filp, char *buffer, size_t buflen);
 	virtual int			ioctl(struct file *filp, int cmd, unsigned long arg);
+	int					changeAddr(uint8_t new_addr);
 
 	/**
 	* Diagnostics - print some basic information about the driver.
@@ -604,6 +605,31 @@ MB12XX::collect()
 	return ret;
 }
 
+int
+MB12XX::changeAddr(uint8_t new_addr) {
+	int ret;
+
+	/*
+	 * Send the commands to change the I2C address.
+	 */
+
+	// shift new_addr to make it 8-bit
+	new_addr = new_addr << 1;
+	DEVICE_LOG("Changing address to 0x%02x (7-bit) / 0x%02x (8-bit)", (new_addr >> 1), (new_addr));
+	uint8_t val[3] = {MB12XX_SET_ADDRESS_1, MB12XX_SET_ADDRESS_2, new_addr};
+	ret = transfer(val, 3, nullptr, 0);
+
+	if (OK != ret) {
+		perf_count(_comms_errors);
+		DEVICE_DEBUG("i2c::transfer returned %d", ret);
+		return ret;
+	}
+
+	ret = OK;
+
+	return ret;
+}
+
 void
 MB12XX::start()
 {
@@ -741,6 +767,7 @@ void	start();
 void	stop();
 void	test();
 void	reset();
+void	changeAddr(char *argv);
 void	info();
 
 /**
@@ -913,6 +940,22 @@ info()
 	exit(0);
 }
 
+void
+changeAddr(char *argv) {
+	if (g_dev == nullptr) {
+		errx(1, "driver not running");
+	}
+
+	int new_addr = strtol(argv, nullptr, 0);
+	if (!new_addr) {
+		// either conversion failed or 0 was actually provided, which is not a valid address
+		errx(1, "Invalid address provided");
+	}
+	g_dev->changeAddr(new_addr);
+
+	exit(0);
+}
+
 } /* namespace */
 
 int
@@ -946,6 +989,16 @@ mb12xx_main(int argc, char *argv[])
 		mb12xx::reset();
 	}
 
+	if (!strcmp(argv[1], "chaddr")) {
+		if (argc < 3) {
+			errx(1, "No address provided. Usage:\n\t%s chaddr new_addr\n\
+new_addr can be provided either in decimal or hex representation \
+and is assumed to be a 7-bit address. It must be lower than 0x%02x.",
+			argv[0], MB12XX_BASEADDR);
+		}
+		mb12xx::changeAddr(argv[2]);
+	}
+
 	/*
 	 * Print driver information.
 	 */
@@ -953,5 +1006,5 @@ mb12xx_main(int argc, char *argv[])
 		mb12xx::info();
 	}
 
-	errx(1, "unrecognized command, try 'start', 'test', 'reset' or 'info'");
+	errx(1, "unrecognized command, try 'start', 'test', 'reset', 'chaddr' or 'info'");
 }
