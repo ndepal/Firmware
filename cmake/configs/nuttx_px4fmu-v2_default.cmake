@@ -54,6 +54,7 @@ set(config_module_list
 	drivers/lis3mdl
 	#drivers/iridiumsbd
 	drivers/ulanding
+	drivers/irlock
 
 	#
 	# System commands
