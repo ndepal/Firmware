@@ -56,6 +56,7 @@ set(config_module_list
 	modules/systemlib/mixer
 	modules/uORB
 	modules/vtol_att_control
+	modules/precland_beacon_est
 
 	lib/controllib
 	lib/conversion
@@ -128,4 +129,3 @@ if(REPLAY_FILE)
 	message("Building with uorb publisher rules support")
 	add_definitions(-DORB_USE_PUBLISHER_RULES)
 endif()
-
