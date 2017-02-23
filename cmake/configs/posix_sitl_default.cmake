@@ -56,7 +56,7 @@ set(config_module_list
 	modules/systemlib/mixer
 	modules/uORB
 	modules/vtol_att_control
-	modules/precland_beacon_est
+	modules/beacon_position_estimator
 
 	lib/controllib
 	lib/conversion
