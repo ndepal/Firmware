@@ -108,7 +108,7 @@ set(config_module_list
 	modules/systemlib
 	modules/systemlib/mixer
 	modules/uORB
-	modules/precland_beacon_est
+	modules/beacon_position_estimator
 
         # micro RTPS
         modules/micrortps_bridge/micrortps_client
