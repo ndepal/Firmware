@@ -48,6 +48,7 @@ BlockLocalPositionEstimator::BlockLocalPositionEstimator() :
 	_dist_subs(),
 	_sub_lidar(NULL),
 	_sub_sonar(NULL),
+	_sub_beacon_position(ORB_ID(beacon_position), 1000 / 10, 0, &getSubscriptions()),
 
 	// publications
 	_pub_lpos(ORB_ID(vehicle_local_position), -1, &getPublications()),
@@ -215,6 +216,13 @@ BlockLocalPositionEstimator::BlockLocalPositionEstimator() :
 
 	// intialize parameter dependent matrices
 	updateParams();
+
+	_bestParamHandle.mode = param_find("BEST_MODE");
+	_bestParamHandle.lat = param_find("BEST_LAT");
+	_bestParamHandle.lon = param_find("BEST_LON");
+	param_get(_bestParamHandle.mode, &_bestParams.mode);
+	param_get(_bestParamHandle.lat, &_bestParams.lat);
+	param_get(_bestParamHandle.lon, &_bestParams.lon);
 }
 
 BlockLocalPositionEstimator::~BlockLocalPositionEstimator()
@@ -297,6 +305,8 @@ void BlockLocalPositionEstimator::update()
 				    ((!_sub_armed.get().armed) && (!_sub_land.get().freefall)))
 				   && (!(_lidarInitialized || _mocapInitialized || _visionInitialized || _sonarInitialized))
 				   && ((_timeStamp - _time_last_land) > 1.0e6f / LAND_RATE));
+	bool beaconPositionUpdated = _sub_beacon_position.updated();
+
 
 	// get new data
 	updateSubscriptions();
@@ -516,10 +526,20 @@ void BlockLocalPositionEstimator::update()
 		}
 	}
 
+	if (beaconPositionUpdated) {
+		if (!_beaconInitialized) {
+			beaconInit();
+
+		} else {
+			beaconCorrect();
+		}
+	}
+
 	if (_altOriginInitialized) {
 		// update all publications if possible
 		publishLocalPos();
 		publishEstimatorStatus();
+		_pub_innov.get().timestamp = _timeStamp;
 		_pub_innov.update();
 
 		if (_validXY) {
