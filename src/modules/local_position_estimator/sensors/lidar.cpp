@@ -27,6 +27,14 @@ void BlockLocalPositionEstimator::lidarInit()
 					     int(100 * _lidarStats.getStdDev()(0)));
 		_sensorTimeout &= ~SENSOR_LIDAR;
 		_sensorFault &= ~SENSOR_LIDAR;
+
+		// reset HAGL estimate
+		// account for leaning
+		y(0) = y(0) *
+		       cosf(_eul(0)) *
+		       cosf(_eul(1));
+		// PX4_WARN("Setting terrain state from %f to %f", (double)_x(X_tz), (double)_x(X_z) + y(0));
+		_x(X_tz) = _x(X_z) + y(0);
 	}
 }
 
@@ -66,9 +74,9 @@ void BlockLocalPositionEstimator::lidarCorrect()
 	if (lidarMeasure(y) != OK) { return; }
 
 	// account for leaning
-	y(0) = y(0) *
-	       cosf(_eul(0)) *
-	       cosf(_eul(1));
+	// y(0) = y(0) *
+	//        cosf(_eul(0)) *
+	//        cosf(_eul(1));
 
 	// measurement matrix
 	Matrix<float, n_y_lidar, n_x> C;
@@ -94,7 +102,7 @@ void BlockLocalPositionEstimator::lidarCorrect()
 	Matrix<float, n_y_lidar, n_y_lidar> S_I = inv<float, n_y_lidar>((C * _P * C.transpose()) + R);
 	Vector<float, n_y_lidar> r = y - C * _x;
 	_pub_innov.get().hagl_innov = r(0);
-	_pub_innov.get().hagl_innov_var = R(0, 0);
+	_pub_innov.get().hagl_innov_var = 1 / S_I(0, 0);
 
 	// fault detection
 	float beta = (r.transpose() * (S_I * r))(0, 0);
