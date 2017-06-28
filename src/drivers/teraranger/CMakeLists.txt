@@ -31,12 +31,12 @@
 #
 ############################################################################
 px4_add_module(
-	MODULE drivers__trone
-	MAIN trone
+	MODULE drivers__teraranger
+	MAIN teraranger
 	STACK_MAIN 1200
 	COMPILE_FLAGS
 	SRCS
-		trone.cpp
+		teraranger.cpp
 	DEPENDS
 		platforms__common
 	)

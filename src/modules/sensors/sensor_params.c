@@ -3339,7 +3339,9 @@ PARAM_DEFINE_INT32(SENS_EN_SF0X, 0);
 PARAM_DEFINE_INT32(SENS_EN_MB12XX, 0);
 
 /**
- * TeraRanger One (trone)
+ * TeraRanger One/Evo
+ *
+ * Autodetects TeraRanger One and TeraRanger Evo
  *
  * @reboot_required true
  *

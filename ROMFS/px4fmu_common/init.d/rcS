@@ -802,7 +802,7 @@ then
 	# teraranger one tof sensor
 	if param compare SENS_EN_TRONE 1
 	then
-		if trone start
+		if teraranger start
 		then
 		fi
 	fi
