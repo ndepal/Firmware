@@ -469,7 +469,8 @@ MavlinkReceiver::handle_message_command_long(mavlink_message_t *msg)
 
 out:
 
-	if (send_ack) {
+	// send ack only if this mavlink interface is not supposed to forward its messages to sub-components
+	if (send_ack && !_mavlink->get_forwarding_on()) {
 		vehicle_command_ack_s command_ack = {
 			.timestamp = 0,
 			.command = cmd_mavlink.command,
@@ -561,7 +562,8 @@ MavlinkReceiver::handle_message_command_int(mavlink_message_t *msg)
 
 out:
 
-	if (send_ack) {
+	// send ack only if this mavlink interface is not supposed to forward its messages to sub-components
+	if (send_ack && !_mavlink->get_forwarding_on()) {
 		vehicle_command_ack_s command_ack = {
 			.timestamp = 0,
 			.command = cmd_mavlink.command,
