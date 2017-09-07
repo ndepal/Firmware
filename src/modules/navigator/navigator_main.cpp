@@ -69,6 +69,7 @@
 #include <uORB/topics/home_position.h>
 #include <uORB/topics/mission.h>
 #include <uORB/topics/vehicle_command.h>
+#include <uORB/topics/vehicle_command_ack.h>
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/uORB.h>
 
@@ -219,12 +220,6 @@ Navigator::params_update()
 }
 
 void
-Navigator::vehicle_roi_update()
-{
-	orb_copy(ORB_ID(vehicle_roi), _vehicle_roi_sub, &_vroi);
-}
-
-void
 Navigator::task_main_trampoline(int argc, char *argv[])
 {
 	navigator::g_navigator->task_main();
@@ -257,7 +252,6 @@ Navigator::task_main()
 	_offboard_mission_sub = orb_subscribe(ORB_ID(offboard_mission));
 	_param_update_sub = orb_subscribe(ORB_ID(parameter_update));
 	_vehicle_command_sub = orb_subscribe(ORB_ID(vehicle_command));
-	_vehicle_roi_sub = orb_subscribe(ORB_ID(vehicle_roi));
 
 	/* copy all topics first time */
 	vehicle_status_update();
@@ -269,7 +263,6 @@ Navigator::task_main()
 	home_position_update(true);
 	fw_pos_ctrl_status_update(true);
 	params_update();
-	vehicle_roi_update();
 
 	/* wakeup source(s) */
 	px4_pollfd_struct_t fds[1] = {};
@@ -380,20 +373,19 @@ Navigator::task_main()
 			home_position_update();
 		}
 
-		/* ROI updated */
-		orb_check(_vehicle_roi_sub, &updated);
-
-		if (updated) {
-			vehicle_roi_update();
-		}
-
 		orb_check(_vehicle_command_sub, &updated);
 
 		if (updated) {
 			vehicle_command_s cmd;
 			orb_copy(ORB_ID(vehicle_command), _vehicle_command_sub, &cmd);
 
-			if (cmd.command == vehicle_command_s::VEHICLE_CMD_DO_REPOSITION) {
+			if (cmd.command == vehicle_command_s::VEHICLE_CMD_DO_GO_AROUND) {
+
+				// DO_GO_AROUND is currently handled by the position controller (unacknowledged)
+				// TODO: move DO_GO_AROUND handling to navigator
+				publish_vehicle_command_ack(cmd, vehicle_command_s::VEHICLE_CMD_RESULT_ACCEPTED);
+
+			} else if (cmd.command == vehicle_command_s::VEHICLE_CMD_DO_REPOSITION) {
 
 				struct position_setpoint_triplet_s *rep = get_reposition_triplet();
 				struct position_setpoint_triplet_s *curr = get_position_setpoint_triplet();
@@ -449,6 +441,8 @@ Navigator::task_main()
 				rep->current.valid = true;
 				rep->next.valid = false;
 
+				// CMD_DO_REPOSITION is acknowledged by commander
+
 			} else if (cmd.command == vehicle_command_s::VEHICLE_CMD_NAV_TAKEOFF) {
 				struct position_setpoint_triplet_s *rep = get_takeoff_triplet();
 
@@ -486,6 +480,8 @@ Navigator::task_main()
 				rep->current.valid = true;
 				rep->next.valid = false;
 
+				// CMD_NAV_TAKEOFF is acknowledged by commander
+
 			} else if (cmd.command == vehicle_command_s::VEHICLE_CMD_DO_LAND_START) {
 
 				/* find NAV_CMD_DO_LAND_START in the mission and
@@ -494,38 +490,22 @@ Navigator::task_main()
 				int land_start = _mission.find_offboard_land_start();
 
 				if (land_start != -1) {
-					struct vehicle_command_s vcmd = {
-						.timestamp = hrt_absolute_time(),
-						.param5 = 0.0f,
-						.param6 = 0.0f,
-						.param1 = (float)land_start,
-						.param2 = 0.0f,
-						.param3 = 0.0f,
-						.param4 = 0.0f,
-						.param7 = 0.0f,
-						.command = vehicle_command_s::VEHICLE_CMD_MISSION_START,
-						.target_system = (uint8_t)get_vstatus()->system_id,
-						.target_component = (uint8_t)get_vstatus()->component_id,
-						.source_system = (uint8_t)get_vstatus()->system_id,
-						.source_component = (uint8_t)get_vstatus()->component_id
-					};
-
-					publish_vehicle_cmd(vcmd);
+					vehicle_command_s vcmd = {};
+					vcmd.param1 = land_start;
+					publish_vehicle_cmd(&vcmd);
 
 				} else {
 					PX4_WARN("planned landing not available");
 				}
 
-			} else if (cmd.command == vehicle_command_s::VEHICLE_CMD_MISSION_START) {
+				publish_vehicle_command_ack(cmd, vehicle_command_s::VEHICLE_CMD_RESULT_ACCEPTED);
 
+			} else if (cmd.command == vehicle_command_s::VEHICLE_CMD_MISSION_START) {
 				if (get_mission_result()->valid &&
 				    PX4_ISFINITE(cmd.param1) && (cmd.param1 >= 0) && (cmd.param1 < _mission_result.seq_total)) {
 
 					_mission.set_current_offboard_mission_index(cmd.param1);
 				}
-
-			} else if (cmd.command == vehicle_command_s::VEHICLE_CMD_DO_PAUSE_CONTINUE) {
-				warnx("navigator: got pause/continue command");
 
 			} else if (cmd.command == vehicle_command_s::VEHICLE_CMD_DO_CHANGE_SPEED) {
 				if (cmd.param2 > FLT_EPSILON) {
@@ -543,6 +523,37 @@ Navigator::task_main()
 						set_cruising_throttle();
 					}
 				}
+
+				// TODO: handle responses for supported DO_CHANGE_SPEED options?
+				publish_vehicle_command_ack(cmd, vehicle_command_s::VEHICLE_CMD_RESULT_ACCEPTED);
+
+			} else if ((cmd.command == vehicle_command_s::VEHICLE_CMD_NAV_ROI) ||
+				   (cmd.command == vehicle_command_s::VEHICLE_CMD_DO_SET_ROI)) {
+
+				_vroi.mode = cmd.param1;
+
+				if (_vroi.mode == vehicle_roi_s::VEHICLE_ROI_WPINDEX) {
+					_vroi.mission_seq = cmd.param2;
+
+				} else if (_vroi.mode == vehicle_roi_s::VEHICLE_ROI_LOCATION) {
+					_vroi.lat = cmd.param5;
+					_vroi.lon = cmd.param6;
+					_vroi.alt = cmd.param7;
+
+				} else if (_vroi.mode == vehicle_roi_s::VEHICLE_ROI_TARGET) {
+					_vroi.target_seq = cmd.param2;
+				}
+
+				if (_roi_pub != nullptr) {
+					orb_publish(ORB_ID(vehicle_roi), _roi_pub, &_vroi);
+
+				} else {
+					_roi_pub = orb_advertise(ORB_ID(vehicle_roi), &_vroi);
+				}
+
+				publish_vehicle_command_ack(cmd, vehicle_command_s::VEHICLE_CMD_RESULT_ACCEPTED);
+
+				break;
 			}
 		}
 
@@ -1015,22 +1026,55 @@ Navigator::publish_att_sp()
 }
 
 void
-Navigator::publish_vehicle_cmd(const struct vehicle_command_s &vcmd)
-{
-	if (_vehicle_cmd_pub != nullptr) {
-		orb_publish(ORB_ID(vehicle_command), _vehicle_cmd_pub, &vcmd);
-
-	} else {
-		_vehicle_cmd_pub = orb_advertise_queue(ORB_ID(vehicle_command), &vcmd, vehicle_command_s::ORB_QUEUE_LENGTH);
-	}
-}
-
-void
 Navigator::set_mission_failure(const char *reason)
 {
 	if (!_mission_result.failure) {
 		_mission_result.failure = true;
 		set_mission_result_updated();
 		mavlink_log_critical(&_mavlink_log_pub, "%s", reason);
+	}
+}
+
+void
+Navigator::publish_vehicle_cmd(vehicle_command_s *vcmd)
+{
+	vcmd->timestamp = hrt_absolute_time();
+	vcmd->target_system = _vstatus.system_id;
+	vcmd->target_component = _vstatus.component_id;
+	vcmd->source_system = _vstatus.system_id;
+	vcmd->source_component = _vstatus.component_id;
+	vcmd->confirmation = false;
+	vcmd->from_external = false;
+
+	if (_vehicle_cmd_pub != nullptr) {
+		orb_publish(ORB_ID(vehicle_command), _vehicle_cmd_pub, vcmd);
+
+	} else {
+		_vehicle_cmd_pub = orb_advertise_queue(ORB_ID(vehicle_command), vcmd, vehicle_command_s::ORB_QUEUE_LENGTH);
+	}
+}
+
+void
+Navigator::publish_vehicle_command_ack(const vehicle_command_s &cmd, uint8_t result)
+{
+	vehicle_command_ack_s command_ack = {};
+
+	command_ack.timestamp = hrt_absolute_time();
+
+	command_ack.command = cmd.command;
+	command_ack.target_system = cmd.source_system;
+	command_ack.target_component = cmd.source_component;
+	command_ack.from_external = cmd.from_external;
+
+	command_ack.result = result;
+	command_ack.result_param1 = 0;
+	command_ack.result_param2 = 0;
+
+	if (_vehicle_cmd_ack_pub != nullptr) {
+		orb_publish(ORB_ID(vehicle_command_ack), _vehicle_cmd_ack_pub, &command_ack);
+
+	} else {
+		_vehicle_cmd_ack_pub = orb_advertise_queue(ORB_ID(vehicle_command_ack), &command_ack,
+				       vehicle_command_ack_s::ORB_QUEUE_LENGTH);
 	}
 }
