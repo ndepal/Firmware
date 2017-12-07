@@ -235,6 +235,7 @@ Mission::on_active()
 	if ((_param_yawmode.get() != MISSION_YAWMODE_NONE
 	     && _param_yawmode.get() < MISSION_YAWMODE_MAX
 	     && _mission_type != MISSION_TYPE_NONE)
+	    || _param_yawmode.get() == MISSION_YAWMODE_TO_ROI
 	    || _navigator->get_vstatus()->is_vtol) {
 
 		heading_sp_update();
