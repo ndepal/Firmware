@@ -87,8 +87,7 @@ public:
 		MISSION_YAWMODE_FRONT_TO_WAYPOINT = 1,
 		MISSION_YAWMODE_FRONT_TO_HOME = 2,
 		MISSION_YAWMODE_BACK_TO_HOME = 3,
-		MISSION_YAWMODE_TO_ROI = 4,
-		MISSION_YAWMODE_MAX = 5
+		MISSION_YAWMODE_MAX = 4
 	};
 
 	bool set_current_offboard_mission_index(unsigned index);
