@@ -771,6 +771,21 @@ void VotedSensorsUpdate::mag_poll(vehicle_magnetometer_s &magnetometer)
 			matrix::Vector3f vect(mag_report.x, mag_report.y, mag_report.z);
 			vect = _mag_rotation[uorb_index] * vect;
 
+			static int cnt = 0;
+			cnt++;
+
+			if (cnt == 2000) {
+				PX4_WARN("Cnt == 2000");
+			}
+
+			static uint64_t final_timestamp;
+
+			if (cnt < 2000) {
+				final_timestamp = mag_report.timestamp;
+			}
+
+			mag_report.timestamp = final_timestamp;
+
 			_last_magnetometer[uorb_index].timestamp = mag_report.timestamp;
 			_last_magnetometer[uorb_index].magnetometer_ga[0] = vect(0);
 			_last_magnetometer[uorb_index].magnetometer_ga[1] = vect(1);
